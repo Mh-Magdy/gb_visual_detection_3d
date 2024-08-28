@@ -46,7 +46,7 @@
 
 #include <limits>
 #include <algorithm>
-
+#include <chrono>
 namespace darknet_ros_3d
 {
 
@@ -63,8 +63,6 @@ Darknet3D::Darknet3D():
   pointcloud_cache_.setCacheSize(100);
   pointcloud_cache_.connectInput(pointCloud_sub_);
   
-
-  last_detection_ts_ = ros::Time(0);
 }
 
 void
@@ -137,14 +135,14 @@ Darknet3D::darknetCb(const darknet_ros_msgs::BoundingBoxes::ConstPtr& msg)
 
 void
 Darknet3D::calculate_boxes(const sensor_msgs::PointCloud2& cloud_pc2,
-    const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr cloud_pcl,
+    const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& cloud_pcl,
     const darknet_ros_msgs::BoundingBoxes::ConstPtr& boxes2d,
     gb_visual_detection_3d_msgs::BoundingBoxes3d* boxes)
 {
   boxes->header.stamp = cloud_pc2.header.stamp;
   boxes->header.frame_id = working_frame_;
 
-  for (auto bbx : boxes2d->bounding_boxes)
+  for (const auto&  bbx : boxes2d->bounding_boxes)
   {
     if ((bbx.probability < minimum_probability_) ||
         (std::find(interested_classes_.begin(), interested_classes_.end(), bbx.Class) == interested_classes_.end()))
@@ -152,24 +150,14 @@ Darknet3D::calculate_boxes(const sensor_msgs::PointCloud2& cloud_pc2,
       continue;
     }
 
-    int center_x, center_y;
-
-    center_x = (bbx.xmax + bbx.xmin) / 2;
-    center_y = (bbx.ymax + bbx.ymin) / 2;
-
-    int pcl_index = (center_y* cloud_pc2.width) + center_x;
-    pcl::PointXYZRGB center_point =  cloud_pcl->at(pcl_index);
-
-    if (std::isnan(center_point.x)){
-       continue;
-    }
-     
+    pcl::PointXYZRGB center_point = compute_center_point(cloud_pc2, cloud_pcl, bbx);
 
     float maxx, minx, maxy, miny, maxz, minz;
 
     maxx = maxy = maxz =  -std::numeric_limits<float>::max();
     minx = miny = minz =  std::numeric_limits<float>::max();
-
+    
+    int pcl_index = 0;
     for (int i = bbx.xmin; i < bbx.xmax; i++)
       for (int j = bbx.ymin; j < bbx.ymax; j++)
       {
@@ -245,5 +233,67 @@ Darknet3D::publish_markers(const gb_visual_detection_3d_msgs::BoundingBoxes3d& b
 
   markers_pub_.publish(msg);
 }
+
+pcl::PointXYZRGB Darknet3D::compute_center_point(const sensor_msgs::PointCloud2& cloud_pc2,
+                                                 const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& cloud_pcl,
+                                                 const darknet_ros_msgs::BoundingBox& box2d) 
+{
+    auto start = std::chrono::high_resolution_clock::now();
+    int center_x = (box2d.xmax + box2d.xmin) / 2;
+    int center_y = (box2d.ymax + box2d.ymin) / 2;
+
+    int width = box2d.xmax - box2d.xmin;
+    int height = box2d.ymax - box2d.ymin;
+
+    // Convert num_samples to be in terms of height and width percentages
+    int num_samples = 500; // Example number of samples
+    float width_percentage = 0.55f;  // 55% of the bounding box width
+    float height_percentage = 0.35f; // 35% of the bounding box height
+
+    int width_step = static_cast<int>(width * width_percentage) / num_samples;
+    int height_step = static_cast<int>(height * height_percentage) / num_samples;
+
+    std::vector<pcl::PointXYZRGB> points;
+
+    // Sampling in the region defined by the bounding box
+    for (int i = -num_samples / 2; i <= num_samples / 2; ++i) {
+        for (int j = -num_samples / 2; j <= num_samples / 2; ++j) {
+            int new_x = center_x + i * width_step;
+            int new_y = center_y + j * height_step;
+
+            // Ensure the new points are within the image bounds
+            if (new_x < 0 || new_x >= cloud_pc2.width || new_y < 0 || new_y >= cloud_pc2.height) {
+                continue;
+            }
+
+            int pcl_index = (new_y * cloud_pc2.width) + new_x;
+            pcl::PointXYZRGB point = cloud_pcl->at(pcl_index);
+
+            // Check if the point is valid
+            if (!std::isnan(point.x)) {
+                points.push_back(point);
+            }
+        }
+    }
+
+    // If no valid points were found, return a default invalid point
+    if (points.empty()) {
+        return pcl::PointXYZRGB();
+    }
+
+    // Find the point with the minimum x value
+    pcl::PointXYZRGB min_x_point = points[0];
+    for (const auto& pt : points) {
+        if (pt.x < min_x_point.x) {
+            min_x_point = pt;
+        }
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end - start;
+    std::cout << "All the processing took " << duration.count()
+              << " milliseconds." << std::endl;
+    return min_x_point;
+}
+
 
 };  // namespace darknet_ros_3d

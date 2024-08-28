@@ -69,11 +69,13 @@ private:
   void publish_markers(const gb_visual_detection_3d_msgs::BoundingBoxes3d& boxes);
 
   void calculate_boxes(const sensor_msgs::PointCloud2& cloud_pc2,
-      const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr cloud_pcl,
+      const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& cloud_pcl,
       const darknet_ros_msgs::BoundingBoxes::ConstPtr& boxes2d,
       gb_visual_detection_3d_msgs::BoundingBoxes3d* boxes);
   
-  
+  pcl::PointXYZRGB compute_center_point(const sensor_msgs::PointCloud2& cloud_pc2,
+      const pcl::PointCloud<pcl::PointXYZRGB>::ConstPtr& cloud_pcl,
+      const darknet_ros_msgs::BoundingBox& box2d);
 
   ros::NodeHandle nh_;
   ros::Subscriber yolo_sub_;
